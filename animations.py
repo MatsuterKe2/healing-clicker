@@ -82,34 +82,60 @@ class ClickAnimation:
 
     def __init__(self) -> None:
         """初期化"""
-        self.scale: float = 1.0
-        self.target_scale: float = 1.0
+        self.elapsed: float = 0.0
         self.is_animating: bool = False
-        self.shrink_phase: bool = True
+        self.duration: float = ANIMATION["click_scale_duration"]
+        self.squash_portion: float = ANIMATION["click_squash_portion"]
+        self.min_scale_y: float = ANIMATION["click_scale_min_y"]
+        self.max_scale_x: float = ANIMATION["click_scale_max_x"]
 
     def trigger(self) -> None:
         """アニメーション開始"""
-        self.scale = ANIMATION["click_scale_min"]
-        self.target_scale = 1.0
+        self.elapsed = 0.0
         self.is_animating = True
-        self.shrink_phase = False
 
     def update(self, dt: float) -> None:
         """更新"""
         if not self.is_animating:
             return
 
-        # スケールを元に戻す
-        speed: float = (1.0 - ANIMATION["click_scale_min"]) / ANIMATION["click_scale_duration"]
-        self.scale += speed * dt
-
-        if self.scale >= 1.0:
-            self.scale = 1.0
+        self.elapsed += dt
+        if self.elapsed >= self.duration:
+            self.elapsed = self.duration
             self.is_animating = False
 
-    def get_scale(self) -> float:
+    def _ease_out_quad(self, t: float) -> float:
+        """イージング: ease-out quad"""
+        return 1 - (1 - t) * (1 - t)
+
+    def _ease_out_back(self, t: float) -> float:
+        """イージング: back (軽い跳ね返り)"""
+        c1: float = 1.70158
+        c3: float = c1 + 1
+        return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2
+
+    def get_scale(self) -> tuple[float, float]:
         """現在のスケールを取得"""
-        return self.scale
+        if not self.is_animating:
+            return (1.0, 1.0)
+
+        if self.duration <= 0:
+            return (1.0, 1.0)
+
+        t: float = self.elapsed / self.duration
+        squash_portion: float = min(max(self.squash_portion, 0.05), 0.95)
+        if t <= squash_portion:
+            phase: float = t / squash_portion
+            eased: float = self._ease_out_quad(phase)
+            scale_y: float = 1 - (1 - self.min_scale_y) * eased
+            scale_x: float = 1 + (self.max_scale_x - 1) * eased
+            return (scale_x, scale_y)
+
+        phase = (t - squash_portion) / (1 - squash_portion)
+        eased = self._ease_out_back(phase)
+        scale_y = self.min_scale_y + (1 - self.min_scale_y) * eased
+        scale_x = self.max_scale_x - (self.max_scale_x - 1) * eased
+        return (scale_x, scale_y)
 
 
 class ParticleEffect:
@@ -226,6 +252,6 @@ class AnimationManager:
         for popup in self.popups:
             popup.draw(surface)
 
-    def get_click_scale(self) -> float:
+    def get_click_scale(self) -> tuple[float, float]:
         """クリックスケールを取得"""
         return self.click_animation.get_scale()
