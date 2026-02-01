@@ -133,39 +133,101 @@ class Game:
             except Exception:
                 pass
 
-        # フォールバック: 簡易的な丸いキャラクター
+        # フォールバック: アニメ風の簡易キャラクター
         size: tuple[int, int] = CHARACTER["size"]
         surface: pygame.Surface = pygame.Surface(size, pygame.SRCALPHA)
+        center_x: int = size[0] // 2
+        center_y: int = size[1] // 2
+        skin: tuple[int, int, int] = (255, 228, 225)
+        hair: tuple[int, int, int] = (180, 130, 220)
+        hair_shadow: tuple[int, int, int] = (150, 100, 200)
+        ribbon: tuple[int, int, int] = (255, 150, 180)
 
-        # 体 (大きな円)
+        # 背景の柔らかいフレーム
         pygame.draw.circle(
-            surface, COLORS["primary"],
-            (size[0] // 2, size[1] // 2), size[0] // 2 - 10
+            surface, COLORS["accent"], (center_x, center_y), size[0] // 2 - 6
         )
 
-        # 顔の輪郭
-        pygame.draw.circle(
-            surface, COLORS["accent"],
-            (size[0] // 2, size[1] // 2 - 20), size[0] // 3
+        # 髪のシルエット
+        pygame.draw.ellipse(
+            surface,
+            hair,
+            (center_x - 70, center_y - 90, 140, 150)
+        )
+        pygame.draw.ellipse(
+            surface,
+            hair_shadow,
+            (center_x - 75, center_y - 85, 150, 155),
+            6
         )
 
-        # 目
-        eye_y: int = size[1] // 2 - 30
-        pygame.draw.circle(surface, COLORS["black"], (size[0] // 2 - 25, eye_y), 8)
-        pygame.draw.circle(surface, COLORS["black"], (size[0] // 2 + 25, eye_y), 8)
-        pygame.draw.circle(surface, COLORS["white"], (size[0] // 2 - 23, eye_y - 2), 3)
-        pygame.draw.circle(surface, COLORS["white"], (size[0] // 2 + 27, eye_y - 2), 3)
+        # 前髪
+        pygame.draw.polygon(
+            surface,
+            hair,
+            [
+                (center_x - 55, center_y - 40),
+                (center_x, center_y - 70),
+                (center_x + 55, center_y - 40),
+                (center_x + 40, center_y - 15),
+                (center_x - 40, center_y - 15),
+            ]
+        )
 
-        # 頬 (ピンクの円)
-        pygame.draw.circle(surface, (255, 200, 200), (size[0] // 2 - 40, eye_y + 20), 12)
-        pygame.draw.circle(surface, (255, 200, 200), (size[0] // 2 + 40, eye_y + 20), 12)
+        # 顔
+        pygame.draw.ellipse(
+            surface,
+            skin,
+            (center_x - 52, center_y - 40, 104, 110)
+        )
+
+        # 目 (大きめの瞳)
+        eye_y: int = center_y - 10
+        eye_offset: int = 28
+        for direction in (-1, 1):
+            eye_x: int = center_x + direction * eye_offset
+            pygame.draw.ellipse(surface, COLORS["white"], (eye_x - 16, eye_y - 10, 32, 24))
+            pygame.draw.ellipse(surface, (120, 80, 200), (eye_x - 10, eye_y - 6, 20, 20))
+            pygame.draw.circle(surface, COLORS["black"], (eye_x, eye_y + 2), 6)
+            pygame.draw.circle(surface, COLORS["white"], (eye_x - 5, eye_y - 4), 4)
+
+        # まゆげ
+        pygame.draw.arc(
+            surface,
+            COLORS["text"],
+            (center_x - 45, eye_y - 30, 35, 20),
+            3.4, 5.0, 3
+        )
+        pygame.draw.arc(
+            surface,
+            COLORS["text"],
+            (center_x + 10, eye_y - 30, 35, 20),
+            4.4, 6.0, 3
+        )
+
+        # 頬 (チーク)
+        pygame.draw.circle(surface, (255, 190, 200), (center_x - 38, eye_y + 22), 10)
+        pygame.draw.circle(surface, (255, 190, 200), (center_x + 38, eye_y + 22), 10)
 
         # 口 (にっこり)
         pygame.draw.arc(
             surface, COLORS["text"],
-            (size[0] // 2 - 20, eye_y + 10, 40, 30),
+            (center_x - 18, eye_y + 20, 36, 24),
             3.14, 0, 3
         )
+
+        # リボン
+        pygame.draw.polygon(
+            surface,
+            ribbon,
+            [
+                (center_x - 70, center_y - 60),
+                (center_x - 90, center_y - 70),
+                (center_x - 72, center_y - 82),
+                (center_x - 55, center_y - 72),
+            ]
+        )
+        pygame.draw.circle(surface, (255, 120, 160), (center_x - 70, center_y - 72), 6)
 
         return surface
 
@@ -324,13 +386,13 @@ class Game:
 
     def _draw_character(self, screen: pygame.Surface) -> None:
         """キャラクター描画"""
-        scale: float = self.animation_manager.get_click_scale()
+        scale_x, scale_y = self.animation_manager.get_click_scale()
 
-        if scale != 1.0:
+        if scale_x != 1.0 or scale_y != 1.0:
             # スケーリング
             scaled_size: tuple[int, int] = (
-                int(CHARACTER["size"][0] * scale),
-                int(CHARACTER["size"][1] * scale)
+                int(CHARACTER["size"][0] * scale_x),
+                int(CHARACTER["size"][1] * scale_y)
             )
             scaled_img: pygame.Surface = pygame.transform.scale(
                 self.character_image, scaled_size

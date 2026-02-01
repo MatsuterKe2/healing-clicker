@@ -74,8 +74,10 @@ UPGRADES = {
 
 # アニメーション設定
 ANIMATION = {
-    "click_scale_min": 0.95,
-    "click_scale_duration": 0.1,  # 秒
+    "click_scale_duration": 0.18,  # 秒
+    "click_squash_portion": 0.35,  # 前半の押し込み割合
+    "click_scale_min_y": 0.86,     # ぷにっと縮む縦方向スケール
+    "click_scale_max_x": 1.08,     # ぷにっと広がる横方向スケール
     "popup_duration": 1.0,        # 秒
     "popup_rise_distance": 40,    # ピクセル
 }
