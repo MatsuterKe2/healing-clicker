@@ -8,9 +8,10 @@ from typing import TYPE_CHECKING, Any
 
 import pygame
 
-from settings import COLORS, UPGRADES
+from settings import ACHIEVEMENTS, AFFECTION, CHARACTERS, COLORS, UPGRADES
 
 if TYPE_CHECKING:
+    from character_manager import CharacterManager
     from player import Player
 
 
@@ -429,3 +430,341 @@ class SettingsPanel:
     def get_volumes(self) -> tuple[float, float]:
         """音量値を取得"""
         return self.bgm_slider.get_value(), self.sfx_slider.get_value()
+
+
+# ==================================================================
+# キャラ切替パネル
+# ==================================================================
+class CharacterSelectPanel:
+    """キャラクター選択パネル"""
+
+    def __init__(
+        self,
+        screen_width: int,
+        screen_height: int,
+        fonts: dict[str, pygame.font.Font],
+    ) -> None:
+        self.width: int = 500
+        self.height: int = 420
+        self.x: int = (screen_width - self.width) // 2
+        self.y: int = (screen_height - self.height) // 2
+        self.rect: pygame.Rect = pygame.Rect(self.x, self.y, self.width, self.height)
+        self.fonts: dict[str, pygame.font.Font] = fonts
+        self.is_visible: bool = False
+        self.close_button: Button = Button(
+            self.x + self.width // 2 - 60,
+            self.y + self.height - 55,
+            120, 40, "閉じる", fonts["small"],
+        )
+
+    def show(self) -> None:
+        self.is_visible = True
+
+    def hide(self) -> None:
+        self.is_visible = False
+
+    def handle_event(
+        self, event: pygame.event.Event, char_mgr: CharacterManager
+    ) -> str | None:
+        """クリックされたキャラIDを返す。閉じるなら None"""
+        if not self.is_visible:
+            return None
+        if self.close_button.handle_event(event):
+            self.hide()
+            return None
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for i, (cid, info) in enumerate(CHARACTERS.items()):
+                card = self._card_rect(i)
+                if card.collidepoint(event.pos) and cid in char_mgr.unlocked:
+                    self.hide()
+                    return cid
+        return None
+
+    def _card_rect(self, index: int) -> pygame.Rect:
+        cols = 2
+        card_w, card_h = 210, 140
+        pad = 20
+        col = index % cols
+        row = index // cols
+        cx = self.x + 30 + col * (card_w + pad)
+        cy = self.y + 55 + row * (card_h + pad)
+        return pygame.Rect(cx, cy, card_w, card_h)
+
+    def draw(self, surface: pygame.Surface, char_mgr: CharacterManager) -> None:
+        if not self.is_visible:
+            return
+        # オーバーレイ
+        overlay = pygame.Surface(
+            (surface.get_width(), surface.get_height()), pygame.SRCALPHA
+        )
+        overlay.fill((0, 0, 0, 128))
+        surface.blit(overlay, (0, 0))
+        # パネル背景
+        pygame.draw.rect(surface, COLORS["white"], self.rect, border_radius=15)
+        pygame.draw.rect(surface, COLORS["text"], self.rect, 3, border_radius=15)
+        # タイトル
+        title = self.fonts["large"].render("キャラクター", True, COLORS["text"])
+        tr = title.get_rect(centerx=self.rect.centerx, y=self.y + 12)
+        surface.blit(title, tr)
+        # カード
+        for i, (cid, info) in enumerate(CHARACTERS.items()):
+            card = self._card_rect(i)
+            unlocked = cid in char_mgr.unlocked
+            is_current = cid == char_mgr.current_id
+            if unlocked:
+                bg = COLORS["primary"] if is_current else COLORS["accent"]
+            else:
+                bg = COLORS["text_light"]
+            pygame.draw.rect(surface, bg, card, border_radius=10)
+            pygame.draw.rect(surface, COLORS["text"], card, 2, border_radius=10)
+            if unlocked:
+                name_s = self.fonts["medium"].render(info["name"], True, COLORS["text"])
+                surface.blit(name_s, (card.x + 10, card.y + 10))
+                theme_s = self.fonts["small"].render(info["theme"], True, COLORS["text_light"])
+                surface.blit(theme_s, (card.x + 10, card.y + 40))
+                # 好感度
+                aff = char_mgr.get_affection(cid)
+                aff_lvl = char_mgr.get_affection_level_info(cid)
+                aff_text = f"好感度: {aff:.0f} ({aff_lvl['name']})"
+                aff_s = self.fonts["small"].render(aff_text, True, COLORS["text"])
+                surface.blit(aff_s, (card.x + 10, card.y + 65))
+                if is_current:
+                    sel = self.fonts["small"].render("選択中", True, (255, 100, 100))
+                    surface.blit(sel, (card.x + 10, card.y + 110))
+            else:
+                # シルエット + ヒント
+                q = self.fonts["xlarge"].render("？", True, COLORS["white"])
+                qr = q.get_rect(center=(card.centerx, card.y + 45))
+                surface.blit(q, qr)
+                cond = info["unlock_condition"]
+                if cond:
+                    hint = self._condition_hint(cond)
+                    h_s = self.fonts["small"].render(hint, True, COLORS["text_light"])
+                    surface.blit(h_s, (card.x + 10, card.y + 95))
+        self.close_button.draw(surface)
+
+    @staticmethod
+    def _condition_hint(cond: dict[str, Any]) -> str:
+        t, v = cond["type"], cond["value"]
+        if t == "total_points":
+            return f"累計 {v:,} pt 獲得で解放"
+        if t == "total_clicks":
+            return f"累計 {v:,} 回クリックで解放"
+        if t == "achievements":
+            return f"実績 {v} 個達成で解放"
+        return "条件を満たすと解放"
+
+
+# ==================================================================
+# 好感度バー
+# ==================================================================
+class AffectionBar:
+    """キャラ下に表示する好感度バー"""
+
+    def __init__(self, fonts: dict[str, pygame.font.Font]) -> None:
+        self.fonts = fonts
+
+    def draw(
+        self,
+        surface: pygame.Surface,
+        x: int,
+        y: int,
+        char_mgr: CharacterManager,
+    ) -> None:
+        aff = char_mgr.get_affection()
+        info = char_mgr.get_affection_level_info()
+        bar_w, bar_h = 160, 12
+        bx = x - bar_w // 2
+        by = y
+        # ハートアイコン(テキスト)
+        heart = self.fonts["small"].render("♥", True, (255, 100, 130))
+        surface.blit(heart, (bx - 22, by - 4))
+        # バー背景
+        pygame.draw.rect(surface, COLORS["text_light"], (bx, by, bar_w, bar_h), border_radius=6)
+        # バー塗り
+        fill_w = int(bar_w * aff / AFFECTION["max"])
+        if fill_w > 0:
+            pygame.draw.rect(surface, (255, 130, 160), (bx, by, fill_w, bar_h), border_radius=6)
+        # レベル名
+        lvl_s = self.fonts["small"].render(info["name"], True, COLORS["text"])
+        surface.blit(lvl_s, (bx + bar_w + 8, by - 4))
+
+
+# ==================================================================
+# 実績パネル
+# ==================================================================
+class AchievementPanel:
+    """実績一覧パネル"""
+
+    def __init__(
+        self,
+        screen_width: int,
+        screen_height: int,
+        fonts: dict[str, pygame.font.Font],
+    ) -> None:
+        self.width: int = 550
+        self.height: int = 520
+        self.x: int = (screen_width - self.width) // 2
+        self.y: int = (screen_height - self.height) // 2
+        self.rect: pygame.Rect = pygame.Rect(self.x, self.y, self.width, self.height)
+        self.fonts: dict[str, pygame.font.Font] = fonts
+        self.is_visible: bool = False
+        self.scroll_offset: int = 0
+        self.close_button: Button = Button(
+            self.x + self.width // 2 - 60,
+            self.y + self.height - 55,
+            120, 40, "閉じる", fonts["small"],
+        )
+
+    def show(self) -> None:
+        self.is_visible = True
+        self.scroll_offset = 0
+
+    def hide(self) -> None:
+        self.is_visible = False
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        if not self.is_visible:
+            return
+        if self.close_button.handle_event(event):
+            self.hide()
+            return
+        # スクロール
+        if event.type == pygame.MOUSEWHEEL:
+            self.scroll_offset -= event.y * 30
+            self.scroll_offset = max(0, self.scroll_offset)
+
+    def draw(
+        self,
+        surface: pygame.Surface,
+        unlocked_ids: list[str],
+        player: Player,
+        char_mgr: CharacterManager,
+    ) -> None:
+        if not self.is_visible:
+            return
+        # オーバーレイ
+        overlay = pygame.Surface(
+            (surface.get_width(), surface.get_height()), pygame.SRCALPHA
+        )
+        overlay.fill((0, 0, 0, 128))
+        surface.blit(overlay, (0, 0))
+        # パネル
+        pygame.draw.rect(surface, COLORS["white"], self.rect, border_radius=15)
+        pygame.draw.rect(surface, COLORS["text"], self.rect, 3, border_radius=15)
+        # タイトル
+        total = len(ACHIEVEMENTS)
+        done = len(unlocked_ids)
+        title = self.fonts["large"].render(f"実績  {done}/{total}", True, COLORS["text"])
+        tr = title.get_rect(centerx=self.rect.centerx, y=self.y + 12)
+        surface.blit(title, tr)
+        # クリッピング領域
+        list_area = pygame.Rect(self.x + 10, self.y + 55, self.width - 20, self.height - 120)
+        surface.set_clip(list_area)
+        row_h = 52
+        iy = list_area.y - self.scroll_offset
+        for aid, info in ACHIEVEMENTS.items():
+            if iy + row_h < list_area.y:
+                iy += row_h
+                continue
+            if iy > list_area.bottom:
+                break
+            achieved = aid in unlocked_ids
+            # 行背景
+            row_rect = pygame.Rect(list_area.x, iy, list_area.width, row_h - 4)
+            bg = COLORS["accent"] if achieved else (*COLORS["text_light"], 80)
+            pygame.draw.rect(surface, bg, row_rect, border_radius=8)
+            # チェック / グレー
+            mark = "✓" if achieved else "○"
+            mark_c = COLORS["success"] if achieved else COLORS["text_light"]
+            ms = self.fonts["medium"].render(mark, True, mark_c)
+            surface.blit(ms, (row_rect.x + 8, iy + 4))
+            # 名前
+            name_c = COLORS["text"] if achieved else COLORS["text_light"]
+            ns = self.fonts["small"].render(info["name"], True, name_c)
+            surface.blit(ns, (row_rect.x + 40, iy + 4))
+            # 報酬
+            rw = self.fonts["small"].render(f"+{info['reward']:,}pt", True, COLORS["gold"])
+            surface.blit(rw, (row_rect.right - 80, iy + 4))
+            # 進捗バー (未達成)
+            if not achieved:
+                prog = self._get_progress(aid, info, player, char_mgr)
+                if prog is not None:
+                    bar_w = 160
+                    bar_rect = pygame.Rect(row_rect.x + 40, iy + 28, bar_w, 8)
+                    pygame.draw.rect(surface, COLORS["white"], bar_rect, border_radius=4)
+                    fw = int(bar_w * min(1.0, prog))
+                    if fw > 0:
+                        pygame.draw.rect(
+                            surface, COLORS["primary"],
+                            (bar_rect.x, bar_rect.y, fw, 8), border_radius=4,
+                        )
+            iy += row_h
+        # クリップ解除
+        surface.set_clip(None)
+        self.close_button.draw(surface)
+
+    def _get_progress(
+        self, aid: str, info: dict[str, Any], player: Player, char_mgr: CharacterManager
+    ) -> float | None:
+        cond = info["condition"]
+        t, v = cond["type"], cond["value"]
+        if t == "total_clicks":
+            return player.total_clicks / v
+        if t == "total_points":
+            return player.total_points_earned / v
+        if t == "total_upgrades":
+            return sum(player.upgrade_levels.values()) / v
+        if t == "max_affection":
+            return char_mgr.get_max_affection() / v
+        return None
+
+
+# ==================================================================
+# トースト通知
+# ==================================================================
+class ToastNotification:
+    """画面上部からスライドインするトースト"""
+
+    def __init__(self, fonts: dict[str, pygame.font.Font]) -> None:
+        self.fonts = fonts
+        self._queue: list[dict[str, Any]] = []
+        self._current: dict[str, Any] | None = None
+        self._timer: float = 0.0
+        self._show_duration: float = 3.0
+        self._slide_duration: float = 0.3
+
+    def push(self, text: str, color: tuple[int, int, int] | None = None) -> None:
+        self._queue.append({"text": text, "color": color or COLORS["gold"]})
+
+    def update(self, dt: float) -> None:
+        if self._current is None:
+            if self._queue:
+                self._current = self._queue.pop(0)
+                self._timer = 0.0
+            return
+        self._timer += dt
+        if self._timer >= self._show_duration + self._slide_duration:
+            self._current = None
+
+    def draw(self, surface: pygame.Surface) -> None:
+        if self._current is None:
+            return
+        t = self._timer
+        # スライドイン
+        if t < self._slide_duration:
+            ratio = t / self._slide_duration
+            y = int(-50 + 60 * ratio)
+        elif t < self._show_duration:
+            y = 10
+        else:
+            ratio = (t - self._show_duration) / self._slide_duration
+            y = int(10 - 60 * ratio)
+        banner_w = 450
+        bx = (surface.get_width() - banner_w) // 2
+        banner = pygame.Rect(bx, y, banner_w, 44)
+        pygame.draw.rect(surface, (*COLORS["white"], 230), banner, border_radius=12)
+        pygame.draw.rect(surface, self._current["color"], banner, 2, border_radius=12)
+        ts = self.fonts["medium"].render(self._current["text"], True, self._current["color"])
+        tr = ts.get_rect(center=banner.center)
+        surface.blit(ts, tr)

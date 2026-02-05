@@ -5,14 +5,19 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any
 
 import pygame
 
+from achievement_manager import AchievementManager
 from animations import AnimationManager
+from character_manager import CharacterManager
+from event_manager import EventManager
 from player import Player
 from save_manager import SaveManager
 from settings import (
+    AFFECTION,
     AUTO_SAVE_INTERVAL,
     CHARACTER,
     COLORS,
@@ -22,7 +27,15 @@ from settings import (
     UI_LAYOUT,
 )
 from sound_manager import SoundManager
-from ui import Button, SettingsPanel, UpgradePanel
+from ui import (
+    AchievementPanel,
+    AffectionBar,
+    Button,
+    CharacterSelectPanel,
+    SettingsPanel,
+    ToastNotification,
+    UpgradePanel,
+)
 
 
 class Game:
@@ -41,6 +54,9 @@ class Game:
         self.save_manager: SaveManager = SaveManager()
         self.sound_manager: SoundManager = SoundManager()
         self.animation_manager: AnimationManager = AnimationManager()
+        self.char_mgr: CharacterManager = CharacterManager()
+        self.achievement_mgr: AchievementManager = AchievementManager()
+        self.event_mgr: EventManager = EventManager()
 
         # UI初期化
         self._init_ui()
@@ -50,9 +66,9 @@ class Game:
             CHARACTER["position"][0],
             CHARACTER["position"][1],
             CHARACTER["size"][0],
-            CHARACTER["size"][1]
+            CHARACTER["size"][1],
         )
-        self.character_image: pygame.Surface = self._create_placeholder_character()
+        self._refresh_character_image()
 
         # ゲーム状態
         self.auto_save_timer: float = 0.0
@@ -65,35 +81,32 @@ class Game:
         # サウンド読み込み
         self._load_sounds()
 
+        # デイリーログインチェック
+        self._check_daily_login()
+
     def _load_fonts(self) -> dict[str, pygame.font.Font]:
         """フォントを読み込み"""
         fonts: dict[str, pygame.font.Font] = {}
-
-        # システムフォントまたはカスタムフォントを試す
         font_paths: list[str] = [
             "assets/fonts/NotoSansCJKjp-Regular.otf",
             "assets/fonts/NotoSansJP-Regular.ttf",
             "assets/fonts/mplus-1p-regular.ttf",
         ]
-
         font_path: str | None = None
         for path in font_paths:
             if os.path.exists(path):
                 font_path = path
                 break
-
         for size_name, size in FONT_SIZES.items():
             try:
                 if font_path:
                     fonts[size_name] = pygame.font.Font(font_path, size)
                 else:
-                    # フォールバック: システムフォント
                     fonts[size_name] = pygame.font.SysFont(
                         "notosanscjkjp,meiryoui,msgothic", size
                     )
             except Exception:
                 fonts[size_name] = pygame.font.Font(None, size)
-
         return fonts
 
     def _init_ui(self) -> None:
@@ -103,139 +116,57 @@ class Game:
         self.upgrade_panel: UpgradePanel = UpgradePanel(
             panel["x"], panel["y"],
             panel["width"], panel["height"],
-            self.fonts
+            self.fonts,
         )
 
         # 設定ボタン
         settings_pos: tuple[int, int] = UI_LAYOUT["settings_button"]
         self.settings_button: Button = Button(
             settings_pos[0] - 40, settings_pos[1] - 15,
-            80, 30,
-            "[設定]",
-            self.fonts["small"],
-            COLORS["secondary"],
-            COLORS["primary"]
+            80, 30, "[設定]", self.fonts["small"],
+            COLORS["secondary"], COLORS["primary"],
         )
 
-        # 設定パネル
+        # キャラ切替ボタン
+        self.char_button: Button = Button(
+            settings_pos[0] - 140, settings_pos[1] - 15,
+            80, 30, "[キャラ]", self.fonts["small"],
+            COLORS["accent"], COLORS["primary"],
+        )
+
+        # 実績ボタン
+        self.achievement_button: Button = Button(
+            settings_pos[0] - 240, settings_pos[1] - 15,
+            80, 30, "[実績]", self.fonts["small"],
+            COLORS["success"], COLORS["primary"],
+        )
+
+        # パネル類
         self.settings_panel: SettingsPanel = SettingsPanel(
-            SCREEN_WIDTH, SCREEN_HEIGHT, self.fonts
+            SCREEN_WIDTH, SCREEN_HEIGHT, self.fonts,
+        )
+        self.char_select_panel: CharacterSelectPanel = CharacterSelectPanel(
+            SCREEN_WIDTH, SCREEN_HEIGHT, self.fonts,
+        )
+        self.achievement_panel: AchievementPanel = AchievementPanel(
+            SCREEN_WIDTH, SCREEN_HEIGHT, self.fonts,
         )
 
-    def _create_placeholder_character(self) -> pygame.Surface:
-        """プレースホルダーキャラクター画像を作成"""
-        # 画像ファイルを試す
-        image_path: str = "assets/images/character.png"
-        if os.path.exists(image_path):
-            try:
-                img: pygame.Surface = pygame.image.load(image_path)
-                return pygame.transform.scale(img, CHARACTER["size"])
-            except Exception:
-                pass
+        # 好感度バー
+        self.affection_bar: AffectionBar = AffectionBar(self.fonts)
 
-        # フォールバック: アニメ風の簡易キャラクター
-        size: tuple[int, int] = CHARACTER["size"]
-        surface: pygame.Surface = pygame.Surface(size, pygame.SRCALPHA)
-        center_x: int = size[0] // 2
-        center_y: int = size[1] // 2
-        skin: tuple[int, int, int] = (255, 228, 225)
-        hair: tuple[int, int, int] = (180, 130, 220)
-        hair_shadow: tuple[int, int, int] = (150, 100, 200)
-        ribbon: tuple[int, int, int] = (255, 150, 180)
+        # トースト通知
+        self.toast: ToastNotification = ToastNotification(self.fonts)
 
-        # 背景の柔らかいフレーム
-        pygame.draw.circle(
-            surface, COLORS["accent"], (center_x, center_y), size[0] // 2 - 6
+    def _refresh_character_image(self) -> None:
+        """現在のキャラクターで画像を再生成"""
+        self.character_image: pygame.Surface = self.char_mgr.create_character_surface(
+            CHARACTER["size"]
         )
-
-        # 髪のシルエット
-        pygame.draw.ellipse(
-            surface,
-            hair,
-            (center_x - 70, center_y - 90, 140, 150)
-        )
-        pygame.draw.ellipse(
-            surface,
-            hair_shadow,
-            (center_x - 75, center_y - 85, 150, 155),
-            6
-        )
-
-        # 前髪
-        pygame.draw.polygon(
-            surface,
-            hair,
-            [
-                (center_x - 55, center_y - 40),
-                (center_x, center_y - 70),
-                (center_x + 55, center_y - 40),
-                (center_x + 40, center_y - 15),
-                (center_x - 40, center_y - 15),
-            ]
-        )
-
-        # 顔
-        pygame.draw.ellipse(
-            surface,
-            skin,
-            (center_x - 52, center_y - 40, 104, 110)
-        )
-
-        # 目 (大きめの瞳)
-        eye_y: int = center_y - 10
-        eye_offset: int = 28
-        for direction in (-1, 1):
-            eye_x: int = center_x + direction * eye_offset
-            pygame.draw.ellipse(surface, COLORS["white"], (eye_x - 16, eye_y - 10, 32, 24))
-            pygame.draw.ellipse(surface, (120, 80, 200), (eye_x - 10, eye_y - 6, 20, 20))
-            pygame.draw.circle(surface, COLORS["black"], (eye_x, eye_y + 2), 6)
-            pygame.draw.circle(surface, COLORS["white"], (eye_x - 5, eye_y - 4), 4)
-
-        # まゆげ
-        pygame.draw.arc(
-            surface,
-            COLORS["text"],
-            (center_x - 45, eye_y - 30, 35, 20),
-            3.4, 5.0, 3
-        )
-        pygame.draw.arc(
-            surface,
-            COLORS["text"],
-            (center_x + 10, eye_y - 30, 35, 20),
-            4.4, 6.0, 3
-        )
-
-        # 頬 (チーク)
-        pygame.draw.circle(surface, (255, 190, 200), (center_x - 38, eye_y + 22), 10)
-        pygame.draw.circle(surface, (255, 190, 200), (center_x + 38, eye_y + 22), 10)
-
-        # 口 (にっこり)
-        pygame.draw.arc(
-            surface, COLORS["text"],
-            (center_x - 18, eye_y + 20, 36, 24),
-            3.14, 0, 3
-        )
-
-        # リボン
-        pygame.draw.polygon(
-            surface,
-            ribbon,
-            [
-                (center_x - 70, center_y - 60),
-                (center_x - 90, center_y - 70),
-                (center_x - 72, center_y - 82),
-                (center_x - 55, center_y - 72),
-            ]
-        )
-        pygame.draw.circle(surface, (255, 120, 160), (center_x - 70, center_y - 72), 6)
-
-        return surface
 
     def _load_sounds(self) -> None:
         """サウンドを読み込み"""
         self.sound_manager.load_all_sounds()
-
-        # BGM読み込み
         bgm_path: str = "assets/music/bgm.wav"
         if self.sound_manager.load_bgm(bgm_path):
             self.sound_manager.play_bgm()
@@ -244,35 +175,37 @@ class Game:
         """ゲームデータを読み込み"""
         data: dict[str, Any] | None = self.save_manager.load()
         if data:
-            # プレイヤーデータ復元
             if "player" in data:
                 self.player.from_dict(data["player"])
-
-            # 設定復元
+            if "characters" in data:
+                self.char_mgr.from_dict(data["characters"])
+            if "achievements" in data:
+                self.achievement_mgr.from_dict(data["achievements"])
+            if "events" in data:
+                self.event_mgr.from_dict(data["events"])
             if "settings" in data:
                 settings: dict[str, Any] = data["settings"]
                 self.sound_manager.set_bgm_volume(settings.get("bgm_volume", 0.5))
                 self.sound_manager.set_sfx_volume(settings.get("sfx_volume", 0.7))
                 self.settings_panel.set_volumes(
                     settings.get("bgm_volume", 0.5),
-                    settings.get("sfx_volume", 0.7)
+                    settings.get("sfx_volume", 0.7),
                 )
-
-            # オフライン収益計算
+            # オフライン収益
             if "last_played" in data:
                 offline_earnings: float = self.save_manager.calculate_offline_earnings(
                     self.player, data["last_played"]
                 )
                 if offline_earnings > 0:
                     self.player.add_points(offline_earnings)
-                    # オフライン収益通知用ポップアップ
+                    self.achievement_mgr.mark_offline()
                     self.animation_manager.add_popup(
                         f"お帰りなさい！ +{int(offline_earnings):,}pt",
-                        SCREEN_WIDTH // 2,
-                        SCREEN_HEIGHT // 2,
-                        self.fonts["large"],
-                        COLORS["gold"]
+                        SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2,
+                        self.fonts["large"], COLORS["gold"],
                     )
+        # キャラ画像を最新状態で再生成
+        self._refresh_character_image()
 
     def _save_game(self) -> None:
         """ゲームデータを保存"""
@@ -280,11 +213,30 @@ class Game:
             "bgm_volume": self.sound_manager.get_bgm_volume(),
             "sfx_volume": self.sound_manager.get_sfx_volume(),
         }
-        self.save_manager.save(self.player, settings)
+        extra: dict[str, Any] = {
+            "characters": self.char_mgr.to_dict(),
+            "achievements": self.achievement_mgr.to_dict(),
+            "events": self.event_mgr.to_dict(),
+        }
+        self.save_manager.save(self.player, settings, extra)
 
+    def _check_daily_login(self) -> None:
+        """デイリーログイン好感度"""
+        data = self.save_manager.load()
+        today = datetime.now().strftime("%Y-%m-%d")
+        last_login = ""
+        if data:
+            last_login = data.get("daily_login", "")
+        if last_login != today:
+            self.char_mgr.add_affection(AFFECTION["gains"]["daily_login"])
+            self.toast.push("デイリーボーナス！好感度UP")
+
+    # ------------------------------------------------------------------
+    # イベント処理
+    # ------------------------------------------------------------------
     def handle_event(self, event: pygame.event.Event) -> None:
         """イベント処理"""
-        # 設定パネルが開いている場合
+        # モーダルパネルが開いている場合
         if self.settings_panel.is_visible:
             result: dict[str, Any] | None = self.settings_panel.handle_event(event)
             if result:
@@ -294,57 +246,119 @@ class Game:
                     self.sound_manager.set_sfx_volume(result["sfx_volume"])
             return
 
-        # 設定ボタン
+        if self.char_select_panel.is_visible:
+            selected = self.char_select_panel.handle_event(event, self.char_mgr)
+            if selected:
+                self.char_mgr.switch_character(selected)
+                self._refresh_character_image()
+            return
+
+        if self.achievement_panel.is_visible:
+            self.achievement_panel.handle_event(event)
+            return
+
+        # ヘッダーボタン
         if self.settings_button.handle_event(event):
             self.settings_panel.show()
             return
-
-        # アップグレードパネル
-        upgrade_id: str | None = self.upgrade_panel.handle_event(event, self.player)
-        if upgrade_id:
-            if self.player.purchase_upgrade(upgrade_id):
-                self.sound_manager.play_sound("upgrade")
-                # 購入エフェクト
-                self.animation_manager.add_particles(
-                    self.character_rect.centerx,
-                    self.character_rect.centery,
-                    15
-                )
+        if self.char_button.handle_event(event):
+            self.char_select_panel.show()
             return
+        if self.achievement_button.handle_event(event):
+            self.achievement_panel.show()
+            return
+
+        # イベントアラートクリック
+        if self.event_mgr.showing_alert:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self.event_mgr.dismiss_alert()
+                return
+
+        # イベント中のターゲットクリック
+        if self.event_mgr.current_event is not None:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if self.event_mgr.handle_click(event.pos):
+                    self.sound_manager.play_sound("click")
+                    self.animation_manager.add_particles(event.pos[0], event.pos[1], 8)
+                    return
+
+        # アップグレードパネル (イベント中は操作不可)
+        if self.event_mgr.current_event is None:
+            upgrade_id: str | None = self.upgrade_panel.handle_event(event, self.player)
+            if upgrade_id:
+                if self.player.purchase_upgrade(upgrade_id):
+                    self.sound_manager.play_sound("upgrade")
+                    self.char_mgr.add_affection(AFFECTION["gains"]["upgrade"])
+                    self.animation_manager.add_particles(
+                        self.character_rect.centerx,
+                        self.character_rect.centery, 15,
+                    )
+                    self._check_achievements()
+                return
 
         # キャラクタークリック
         if event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1:  # 左クリック
+            if event.button == 1:
                 if self.character_rect.collidepoint(event.pos):
                     self._on_character_click(event.pos)
 
     def _on_character_click(self, pos: tuple[int, int]) -> None:
         """キャラクタークリック時の処理"""
-        # ポイント獲得
-        points: int = self.player.click()
+        multiplier = self.event_mgr.get_click_multiplier()
+        points, lucky = self.player.click(multiplier)
+
+        # 好感度
+        self.char_mgr.add_affection(AFFECTION["gains"]["click"])
+
+        # ラッキー実績
+        if lucky:
+            self.achievement_mgr.mark_lucky()
 
         # サウンド
         self.sound_manager.play_sound("click")
 
         # アニメーション
         self.animation_manager.trigger_click()
+
+        # 好感度レベルに応じたエフェクト
+        aff_level = self.char_mgr.get_affection_level()
+        popup_color = COLORS["gold"]
+        if multiplier > 1:
+            popup_color = (255, 100, 100)
         self.animation_manager.add_popup(
-            f"+{points}",
-            pos[0],
-            pos[1] - 30,
-            self.fonts["medium"],
-            COLORS["gold"]
+            f"+{points}", pos[0], pos[1] - 30,
+            self.fonts["medium"], popup_color,
         )
 
-        # ボーナス時は追加エフェクト
-        if points > self.player.get_click_power():
+        if aff_level >= 2:
+            # ハートパーティクル
+            self.animation_manager.add_particles(pos[0], pos[1], 5)
+        if aff_level >= 3:
+            self.animation_manager.add_particles(pos[0], pos[1] - 20, 8)
+
+        # ボーナス時
+        base_power = self.player.get_click_power() * multiplier
+        if points > base_power:
             self.sound_manager.play_sound("bonus")
             self.animation_manager.add_particles(pos[0], pos[1], 20)
 
+        # キャラ画像更新 (表情変化の反映)
+        self._refresh_character_image()
+        self._check_achievements()
+
+    # ------------------------------------------------------------------
+    # 更新
+    # ------------------------------------------------------------------
     def update(self, dt: float) -> None:
         """更新"""
         # アニメーション更新
         self.animation_manager.update(dt)
+
+        # キャラアイドルアニメーション
+        self.char_mgr.update_idle(dt)
+
+        # トースト通知
+        self.toast.update(dt)
 
         # 自動収益
         auto_rate: float = self.player.get_auto_rate()
@@ -355,16 +369,73 @@ class Game:
                 self.player.add_points(earned)
                 self.auto_earn_accumulator -= earned
 
+        # ランダムイベント更新
+        event_result = self.event_mgr.update(dt)
+        if event_result is not None:
+            self._on_event_finished(event_result)
+
+        # キャラ解放チェック
+        newly_unlocked = self.char_mgr.check_unlocks(
+            self.player, self.achievement_mgr.count()
+        )
+        for cid in newly_unlocked:
+            from settings import CHARACTERS
+            name = CHARACTERS[cid]["name"]
+            self.toast.push(f"新キャラ解放！ {name}")
+
         # オートセーブ
         self.auto_save_timer += dt
         if self.auto_save_timer >= AUTO_SAVE_INTERVAL:
             self._save_game()
             self.auto_save_timer = 0.0
 
+    def _on_event_finished(self, result: dict[str, Any]) -> None:
+        """イベント完了時処理"""
+        self.achievement_mgr.mark_event()
+        if result["success"]:
+            self.char_mgr.add_affection(AFFECTION["gains"]["event_success"])
+            ev_type = result["type"]
+            reward = 0
+            if ev_type == "gold_rush":
+                self.toast.push("ゴールドラッシュ終了！")
+            elif ev_type == "shooting_star":
+                reward = self.player.get_click_power() * 50
+                self.toast.push(f"流れ星 +{reward:,}pt！")
+            elif ev_type == "flower_field":
+                reward = self.player.get_click_power() * 30
+                self.toast.push(f"お花畑 +{reward:,}pt！")
+            elif ev_type == "rainbow_visitor":
+                self.char_mgr.add_affection(3.0)
+                self.toast.push("虹の訪問者 好感度大幅UP！")
+            if reward > 0:
+                self.player.add_points(reward)
+        else:
+            self.toast.push("イベント失敗...")
+        self._check_achievements()
+
+    def _check_achievements(self) -> None:
+        """実績チェックと通知"""
+        newly = self.achievement_mgr.check_all(self.player, self.char_mgr)
+        for ach in newly:
+            self.player.add_points(ach["reward"])
+            self.toast.push(f"実績達成！ {ach['name']} +{ach['reward']:,}pt")
+            self.sound_manager.play_sound("upgrade")
+
+    # ------------------------------------------------------------------
+    # 描画
+    # ------------------------------------------------------------------
     def draw(self, screen: pygame.Surface) -> None:
         """描画"""
         # キャラクター描画
         self._draw_character(screen)
+
+        # 好感度バー
+        self.affection_bar.draw(
+            screen,
+            self.character_rect.centerx,
+            self.character_rect.bottom + 10,
+            self.char_mgr,
+        )
 
         # ポイント表示
         self._draw_points(screen)
@@ -375,43 +446,58 @@ class Game:
         # アップグレードパネル
         self.upgrade_panel.draw(screen, self.player)
 
-        # 設定ボタン
+        # ヘッダーボタン
         self.settings_button.draw(screen)
+        self.char_button.draw(screen)
+        self.achievement_button.draw(screen)
+
+        # ランダムイベント
+        self.event_mgr.draw(screen, self.fonts)
 
         # アニメーション
         self.animation_manager.draw(screen)
 
-        # 設定パネル（最前面）
+        # トースト通知
+        self.toast.draw(screen)
+
+        # モーダルパネル（最前面）
         self.settings_panel.draw(screen)
+        self.char_select_panel.draw(screen, self.char_mgr)
+        self.achievement_panel.draw(
+            screen,
+            self.achievement_mgr.unlocked,
+            self.player,
+            self.char_mgr,
+        )
 
     def _draw_character(self, screen: pygame.Surface) -> None:
         """キャラクター描画"""
         scale_x, scale_y = self.animation_manager.get_click_scale()
+        idle_y = self.char_mgr.get_idle_offset_y()
 
+        img = self.character_image
         if scale_x != 1.0 or scale_y != 1.0:
-            # スケーリング
             scaled_size: tuple[int, int] = (
                 int(CHARACTER["size"][0] * scale_x),
-                int(CHARACTER["size"][1] * scale_y)
+                int(CHARACTER["size"][1] * scale_y),
             )
-            scaled_img: pygame.Surface = pygame.transform.scale(
-                self.character_image, scaled_size
+            img = pygame.transform.scale(self.character_image, scaled_size)
+            rect: pygame.Rect = img.get_rect(
+                center=(self.character_rect.centerx, self.character_rect.centery + int(idle_y))
             )
-            # 中心を維持
-            rect: pygame.Rect = scaled_img.get_rect(center=self.character_rect.center)
-            screen.blit(scaled_img, rect)
+            screen.blit(img, rect)
         else:
-            screen.blit(self.character_image, self.character_rect)
+            screen.blit(
+                img,
+                (self.character_rect.x, self.character_rect.y + int(idle_y)),
+            )
 
     def _draw_points(self, screen: pygame.Surface) -> None:
         """ポイント表示"""
         pos: tuple[int, int] = UI_LAYOUT["points_display"]
-
-        # 背景
         bg_rect: pygame.Rect = pygame.Rect(pos[0] - 150, pos[1] - 30, 300, 70)
         pygame.draw.rect(screen, (*COLORS["white"], 200), bg_rect, border_radius=15)
 
-        # ポイント数
         points_text: str = f"{int(self.player.points):,}"
         points_surface: pygame.Surface = self.fonts["xlarge"].render(
             points_text, True, COLORS["text"]
@@ -419,7 +505,6 @@ class Game:
         points_rect: pygame.Rect = points_surface.get_rect(center=(pos[0], pos[1]))
         screen.blit(points_surface, points_rect)
 
-        # ラベル
         label_surface: pygame.Surface = self.fonts["small"].render(
             "ポイント", True, COLORS["text_light"]
         )
@@ -432,7 +517,6 @@ class Game:
             f"クリック: +{self.player.get_click_power()}/回",
             f"自動: +{self.player.get_auto_rate():.1f}/秒",
         ]
-
         y: int = 150
         for stat in stats:
             text_surface: pygame.Surface = self.fonts["small"].render(
