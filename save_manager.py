@@ -22,17 +22,25 @@ class SaveManager:
         """初期化"""
         self.save_path: str = save_path
 
-    def save(self, player: Player, settings: dict[str, Any] | None = None) -> bool:
+    def save(
+        self,
+        player: Player,
+        settings: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> bool:
         """ゲームデータをセーブ"""
         try:
             data: dict[str, Any] = {
                 "player": player.to_dict(),
                 "last_played": datetime.now().isoformat(),
+                "daily_login": datetime.now().strftime("%Y-%m-%d"),
                 "settings": settings or {
                     "bgm_volume": DEFAULT_BGM_VOLUME,
                     "sfx_volume": DEFAULT_SFX_VOLUME,
                 },
             }
+            if extra:
+                data.update(extra)
             with open(self.save_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             return True

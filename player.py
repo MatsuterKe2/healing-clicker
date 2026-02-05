@@ -81,17 +81,22 @@ class Player:
         self.points += amount
         self.total_points_earned += amount
 
-    def click(self) -> int:
-        """クリック処理 - 獲得ポイントを返す"""
+    def click(self, multiplier: int = 1) -> tuple[int, bool]:
+        """クリック処理 - (獲得ポイント, ラッキー発動) を返す"""
         base_points: int = self.get_click_power()
 
+        # イベント倍率
+        base_points *= multiplier
+
         # ラッキーボーナス判定
+        lucky: bool = False
         if random.random() < self.get_lucky_chance():
             base_points *= 2
+            lucky = True
 
         self.add_points(base_points)
         self.total_clicks += 1
-        return base_points
+        return base_points, lucky
 
     def to_dict(self) -> dict[str, Any]:
         """セーブ用に辞書に変換"""
